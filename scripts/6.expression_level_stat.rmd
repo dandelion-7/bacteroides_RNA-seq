@@ -1,0 +1,581 @@
+---
+title: "6.expression_level_stat.rmd"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+# Set paths and load libraries
+```{r}
+setwd("~/crisprome/bacteroides_RNA-seq/scripts/")
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggpubr)
+library(ggplot2)
+```
+
+# RNA-seq mapping results of B.theta from 2023 Science paper.
+## Different parameters about MAPQ/paired-alignment could be set, so the conclusions should be compared with different parameters.
+### Read and merge the featureCount output tables with different parameters.
+```{r}
+all_mappable <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/5.featureCounts/featureCounts_output.txt", sep = "\t", header = F)[-1, ]
+colnames(all_mappable) <- all_mappable[1, ]
+all_mappable <- all_mappable[-1, ]
+all_mappable_tidy <- all_mappable %>% gather(key = "sample", value = "read_count", colnames(all_mappable)[7:16]) 
+all_mappable_tidy$filter <- "no"
+
+qc_10 <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/5.featureCounts/featureCounts_qulity_10_output.txt", sep = "\t", header = F)[-1, ]
+colnames(qc_10) <- qc_10[1, ]
+qc_10 <- qc_10[-1, ]
+qc_10_tidy <- qc_10 %>% gather(key = "sample", value = "read_count", colnames(qc_10)[7:16]) 
+qc_10_tidy$filter <- "MAPQ>=10"
+
+qc_1 <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/5.featureCounts/featureCounts_qulity_1_output.txt", sep = "\t", header = F)[-1, ]
+colnames(qc_1) <- qc_1[1, ]
+qc_1 <- qc_1[-1, ]
+qc_1_tidy <- qc_1 %>% gather(key = "sample", value = "read_count", colnames(qc_1)[7:16]) 
+qc_1_tidy$filter <- "MAPQ>=1"
+
+qc_1_pair <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/5.featureCounts/featureCounts_qulity_1_paired_output.txt", sep = "\t", header = F)[-1, ]
+colnames(qc_1_pair) <- qc_1_pair[1, ]
+qc_1_pair <- qc_1_pair[-1, ]
+qc_1_pair_tidy <- qc_1_pair %>% gather(key = "sample", value = "read_count", colnames(qc_1_pair)[7:16]) 
+qc_1_pair_tidy$filter <- "MAPQ>=1&paired"
+
+total <- rbind(all_mappable_tidy, qc_1_tidy, qc_10_tidy, qc_1_pair_tidy)
+total$read_count <- as.numeric(total$read_count)
+total$Length <- as.numeric(total$Length)
+```
+### Calculate the expression levels from different featureCounts parameters.
+```{r}
+sample_read_sum <- total %>% group_by(sample, filter) %>% summarize(sample_read_sum=sum(read_count))
+total <- left_join(total, sample_read_sum, by = c("sample", "filter"))
+total <- total %>% mutate(rpkm = read_count / Length / sample_read_sum * 1e+9)
+
+total_spread <- total[, c("Geneid", "type", "sample", "filter", "rpkm")] %>% spread(key = filter, value = rpkm)
+total_spread %>% ggplot(aes(x = log10(`MAPQ>=1&paired` + 1), y = log10(`MAPQ>=10` + 1))) +
+  geom_point() + 
+  geom_abline(slope = 1, intercept = 0, color = "red") +
+  # scale_x_log10() +
+  # scale_y_log10() + 
+  labs(x = "MAPQ>=1 and paired alignments", y = "MAPQ>=10") + 
+  scale_x_continuous(limits = c(0, 6.2), breaks = c(0, 1, 2, 3, 4, 5, 6)) + 
+  scale_y_continuous(limits = c(0, 6.2), breaks = c(0, 1, 2, 3, 4, 5, 6))
+# ~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/6.expression_level_stat/featureCounts_filter_parameter_compare/filtering_condition_correlations
+```
+### summarize the general expression levels of different types of genes when the featureCounts parameters are different.
+```{r}
+total %>% filter(type == "rRNA") %>% filter(rpkm != 0) %>% 
+  ggplot(aes(x = log10(rpkm+1))) + 
+  geom_histogram() +
+  facet_grid(filter ~ .) + 
+  labs(x = "Log10(RPKM+1)", y = "Count")
+
+total %>% filter(type == "tRNA") %>% filter(rpkm != 0) %>% 
+  ggplot(aes(x = log10(rpkm+1))) + 
+  geom_histogram() +
+  facet_grid(filter ~ .)+ 
+  labs(x = "Log10(RPKM+1)", y = "Count")
+
+total %>% filter(type == "CDS") %>% filter(rpkm != 0) %>% 
+  ggplot(aes(x = log10(rpkm+1))) + 
+  geom_histogram() +
+  facet_grid(filter ~ .)+ 
+  labs(x = "Log10(RPKM+1)", y = "Count")
+
+# ~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/6.expression_level_stat/featureCounts_filter_parameter_compare/rpkm_distributions
+```
+MAPQ>=1 and paired alignment (for PE sequencing data) seems to be a proper parameter setting for featureCounts filtering.
+
+## Summarize the expression levels of defense genes, rRNA reads were included.
+### Read the gff table with defense gene information of B.theta VPI-5482, and merge with RPKM table.
+```{r}
+gff_with_defense_info <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/4.genome_annotations/B_theta_ATCC-29148_with_defense_info.txt", sep = "\t", header = T)
+gff_with_defense_info$Geneid <- str_remove_all(gff_with_defense_info$locus_tag, "locus_tag=")
+colnames(gff_with_defense_info)
+colnames(total)
+total <- left_join(total, gff_with_defense_info[, c(1, 3, 9, 12, 15, 16, 19, 22)], by = c("Chr", "Geneid"))
+total$gene_name[is.na(total$gene_name)] <- "non-defense-gene"
+total <- total %>% mutate(genotype = case_when(
+  str_detect(sample, "wt") ~ "WT", 
+  str_detect(sample, "dIDR") ~ "dIDR"
+))
+total$sys_id_simplified <- total$sys_id %>% str_remove_all("BT_Bacteroides_thetaiotaomicron_ATCC_29148_proteins_")
+```
+### plot the RPKMs of defense genes from different featureCounts parameters
+```{r}
+total$filter <- factor(total$filter, levels = c("no", "MAPQ>=1", "MAPQ>=1&paired", "MAPQ>=10"))
+total$genotype <- factor(total$genotype, levels = c("WT", "dIDR"))
+
+total %>% filter(gene_name != "non-defense-gene") %>% 
+  ggplot(aes(x = gene_name, y = rpkm)) + 
+  geom_bar(stat = "summary", aes(fill = genotype, group = genotype), color = "black", position = position_dodge(), width = 0.8, alpha = 0.8) +
+  # geom_boxplot(aes(fill = genotype, x = gene_name, y = rpkm), position = position_dodge(), width = 0.8, outlier.alpha = 0)+
+  geom_point(aes(fill = genotype, group = genotype), shape = 21, position = position_dodge(width = 0.8)) +
+  facet_grid(filter ~ sys_id_simplified, scales = "free", space = "free_x") + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, face = "bold"), axis.text.y = element_text(face = "bold")) + 
+  stat_compare_means(method = "wilcox.test", aes(group = genotype), label = "p.signif") +
+  theme(axis.title.x = element_blank(), legend.title = element_blank()) +
+  theme(strip.text.x = element_text(face = "bold", size = 6.5), strip.text.y = element_text(face = "bold")) +
+  labs(y = "RPKM")
+# ~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/6.expression_level_stat/rpkm_stats/all_filters_rpkm
+
+total %>% filter(gene_name != "non-defense-gene") %>% filter(filter == "MAPQ>=1&paired") %>% 
+  ggplot(aes(x = gene_name, y = rpkm)) + 
+  geom_bar(stat = "summary", aes(fill = genotype, group = genotype), color = "black", position = position_dodge(), width = 0.8, alpha = 0.8) +
+  # geom_boxplot(aes(fill = genotype, x = gene_name, y = rpkm), position = position_dodge(), width = 0.8, outlier.alpha = 0)+
+  geom_point(aes(fill = genotype, group = genotype), shape = 21, position = position_dodge(width = 0.8)) +
+  facet_grid(. ~ sys_id_simplified, scales = "free", space = "free_x") + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, face = "bold"), axis.text.y = element_text(face = "bold")) +
+  stat_compare_means(method = "wilcox.test", aes(group = genotype), label = "p.signif") + 
+  theme(axis.title.x = element_blank(), legend.title = element_blank()) + 
+  theme(strip.text.x = element_text(face = "bold", size = 6.5), strip.text.y = element_text(face = "bold")) +
+  labs(y = "RPKM")
+# ~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/6.expression_level_stat/rpkm_stats/all_filters_rpkm
+```
+
+## Summarize the expression levels, with rRNA reads excluded in featureCounts.
+### Read the featureCounts table of 2023 Science paper.
+```{r}
+read_count_science <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/5.featureCounts/featureCounts_rRNAignored_quality1_paired_output.txt", sep = "\t", header = F)
+colnames(read_count_science) <- read_count_science[2, ]
+read_count_science <- read_count_science[-c(1,2), ]
+colnames(read_count_science)
+read_count_science_tidy <- read_count_science %>% gather(key = "sample", value = "read_count", colnames(read_count_science)[7:16])
+read_count_science_tidy <- read_count_science_tidy %>% mutate(condition=case_when(
+  str_detect(sample, "dIDR") ~ "dIDR colonization",
+  str_detect(sample, "wt") ~ "WT colonization"
+))
+read_count_science_tidy$setting <- "colonization"
+```
+### Read the featureCounts table of 2020 NC paper.
+```{r}
+read_count_NC <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2020_NC/5.featureCounts/featureCounts_rRNAignored_quality1_paired_output.txt", sep = "\t", header = F)
+colnames(read_count_NC) <- read_count_NC[2, ]
+read_count_NC <- read_count_NC[-c(1,2), ]
+colnames(read_count_NC)
+read_count_NC_tidy <- read_count_NC %>% gather(key = "sample", value = "read_count", colnames(read_count_NC)[7:30])
+read_count_NC_tidy$sample <- read_count_NC_tidy$sample %>% str_remove_all("_ATCC_sorted.bam")
+read_count_NC_tidy <- read_count_NC_tidy %>% mutate(condition = case_when(
+  str_detect(sample, "TEX") & str_detect(sample, "ELP") ~ "+TEX dRNA-seq WT ELP",
+  str_detect(sample, "TEX") & str_detect(sample, "MLP") ~ "+TEX dRNA-seq WT MLP",
+  str_detect(sample, "TEX") & str_detect(sample, "stat") ~ "+TEX dRNA-seq WT stat",
+  !(str_detect(sample, "TEX")) & str_detect(sample, "ELP") ~ "-TEX dRNA-seq WT ELP",
+  !(str_detect(sample, "TEX")) & str_detect(sample, "MLP") ~ "-TEX dRNA-seq WT MLP",
+  !(str_detect(sample, "TEX")) & str_detect(sample, "stat") ~ "-TEX dRNA-seq WT stat",
+  str_detect(sample, "complement") ~ "RNA-seq Comp",
+  str_detect(sample, "KO") ~ "RNA-seq KO",
+  sample %in% c("WT_rep1", "WT_rep2") ~ "RNA-seq WT"
+))
+read_count_NC_tidy$setting <- "culture"
+```
+### Merge the read count table of NC/science paper, and calculate RPKM
+```{r}
+read_count_tidy <- rbind(read_count_science_tidy, read_count_NC_tidy)
+read_count_tidy$read_count <- as.numeric(read_count_tidy$read_count)
+read_count_tidy$Length <- as.numeric(read_count_tidy$Length)
+sample_read_sum <- read_count_tidy %>% group_by(sample) %>% summarize(sample_read_sum = sum(read_count))
+read_count_tidy <- left_join(read_count_tidy, sample_read_sum, by = "sample")
+read_count_tidy <- read_count_tidy %>% mutate(rpkm = read_count / sample_read_sum / Length * 1e+9)
+```
+### Merge the rpkm table with annotation table
+```{r}
+gff_with_defense_info <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/4.genome_annotations/B_theta_ATCC-29148_with_defense_info.txt", sep = "\t", header = T)
+gff_with_defense_info$Geneid <- str_remove_all(gff_with_defense_info$locus_tag, "locus_tag=")
+colnames(gff_with_defense_info)
+read_count_tidy <- left_join(read_count_tidy, gff_with_defense_info[, c(1, 3, 9, 12, 15, 16, 19, 22)], by = c("Chr","Geneid"))
+read_count_tidy$gene_name[is.na(read_count_tidy$gene_name)] <- "non-defense-gene"
+read_count_tidy$sys_id_simplified <- read_count_tidy$sys_id %>% str_remove_all("BT_Bacteroides_thetaiotaomicron_ATCC_29148_proteins_")
+```
+### Plot the rpkm
+```{r}
+unique(read_count_tidy$condition)
+read_count_tidy$condition <- factor(read_count_tidy$condition, levels = c("+TEX dRNA-seq WT ELP",  "+TEX dRNA-seq WT MLP",  "+TEX dRNA-seq WT stat", "-TEX dRNA-seq WT ELP", "-TEX dRNA-seq WT MLP",  "-TEX dRNA-seq WT stat", "RNA-seq Comp", "RNA-seq KO", "RNA-seq WT", "WT colonization", "dIDR colonization"))
+read_count_tidy %>% 
+  filter(condition %in% c("WT colonization", "RNA-seq WT", "-TEX dRNA-seq WT ELP", "-TEX dRNA-seq WT MLP", "-TEX dRNA-seq WT stat")) %>%
+  filter(gene_name != "non-defense-gene") %>% 
+  ggplot(aes(x = gene_name, y = rpkm)) +
+  geom_bar(aes(group = condition, fill = condition), stat = "summary", color = "black", position = position_dodge(), alpha = 0.8) +
+  geom_point(aes(fill = condition, group = condition, shape = setting), position = position_dodge(width = 0.9), size = 2) +
+  facet_grid(.~sys_id_simplified, scales = "free", space = "free_x") +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, face = "bold"), axis.text.y = element_text(face = "bold")) +
+  # stat_compare_means(method = "wilcox.test", aes(group = setting), label = "p.signif") + 
+  theme(axis.title.x = element_blank(), legend.title = element_blank()) + 
+  theme(strip.text.x = element_text(face = "bold", size = 6.5), strip.text.y = element_text(face = "bold")) +
+  labs(y = "RPKM") + 
+  scale_y_continuous(breaks = c(0, 50, 100, 150, 200, 250)) +
+  scale_shape_manual(values = c(25, 21)) + 
+  scale_fill_manual(values = c("#fed976", "#fd8d3c", "#f03b20", "#377eb8", "#7fc97f"))
+
+read_count_tidy %>% 
+  filter(setting == "colonization") %>%
+  filter(gene_name != "non-defense-gene") %>% 
+  ggplot(aes(x = gene_name, y = rpkm)) +
+  geom_bar(aes(group = condition, fill = condition), stat = "summary", color = "black", position = position_dodge(), width = 0.8, alpha = 0.8) +
+  geom_point(aes(fill = condition, group = condition), shape = 21, position = position_dodge(width = 0.8), size = 2) +
+  stat_compare_means(aes(group = condition), method = "wilcox.test", label = "p.signif") +
+  facet_grid(.~sys_id_simplified, scales = "free", space = "free_x") +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, face = "bold"), axis.text.y = element_text(face = "bold")) +
+  # stat_compare_means(method = "wilcox.test", aes(group = setting), label = "p.signif") + 
+  theme(axis.title.x = element_blank(), legend.title = element_blank()) + 
+  theme(strip.text.x = element_text(face = "bold", size = 6.5), strip.text.y = element_text(face = "bold")) +
+  labs(y = "RPKM")
+```
+
+# Summarize the RNA-seq results from 2024 Nature Microbiology paper (rRNA excluded)
+## read the read count table of 2024 Nature Microbiology paper and calculate RPKM
+```{r}
+read_count_nat_micro <- read.delim(
+  "~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2024_NMicro/5.featureCounts/featureCounts_quality1_output.txt",
+  sep = "\t", header = F)
+colnames(read_count_nat_micro) <- read_count_nat_micro[2,]
+read_count_nat_micro <- read_count_nat_micro[-c(1,2), ]
+read_count_nat_micro_tidy <- read_count_nat_micro %>% gather(key = "sample", value = "read_count", colnames(read_count_nat_micro)[7:42])
+read_count_nat_micro_tidy$sample <- read_count_nat_micro_tidy$sample %>% str_remove_all(pattern = "_sorted.bam")
+read_count_nat_micro_tidy$Length <- as.numeric(read_count_nat_micro_tidy$Length)
+read_count_nat_micro_tidy$read_count <- as.numeric(read_count_nat_micro_tidy$read_count)
+
+sample_read_sum_nat_micro <- read_count_nat_micro_tidy %>% group_by(sample) %>% summarize(sample_read_sum = sum(read_count))
+
+read_count_nat_micro_tidy <- left_join(read_count_nat_micro_tidy, sample_read_sum_nat_micro, by = "sample")
+read_count_nat_micro_tidy <- read_count_nat_micro_tidy %>% mutate(RPKM=read_count / sample_read_sum / Length * 1e+9)
+read_count_nat_micro_tidy <- read_count_nat_micro_tidy %>% mutate(
+  condition = case_when(str_detect(sample, "-1") ~ str_remove_all(sample, "-1"),
+                        str_detect(sample, "-2") ~ str_remove_all(sample, "-2")),
+  `repeat` = case_when(str_detect(sample, "-1") ~ "1", 
+                       str_detect(sample, "-2") ~ "2")
+  )
+```
+## merge the rpkm table with annotation table
+```{r}
+gff_with_defense_info <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/4.genome_annotations/B_theta_ATCC-29148_with_defense_info.txt", sep = "\t", header = T)
+gff_with_defense_info$Geneid <- str_remove_all(gff_with_defense_info$locus_tag, "locus_tag=")
+colnames(gff_with_defense_info)
+read_count_nat_micro_tidy <- left_join(read_count_nat_micro_tidy, gff_with_defense_info[, c(1, 3, 9, 12, 15, 16, 19, 22)], by = c("Chr","Geneid"))
+read_count_nat_micro_tidy$gene_name[is.na(read_count_nat_micro_tidy$gene_name)] <- "non-defense-gene"
+read_count_nat_micro_tidy$sys_id_simplified <- read_count_nat_micro_tidy$sys_id %>% str_remove_all("BT_Bacteroides_thetaiotaomicron_ATCC_29148_proteins_")
+```
+## Plot the rpkm
+```{r}
+unique(read_count_nat_micro_tidy$condition)
+read_count_nat_micro_tidy %>% filter(!(condition %in% c("Pooled_noTEX", "Pooled_TEX"))) %>% 
+  filter(str_detect(condition, "TYG")) %>% 
+  filter(gene_name != "non-defense-gene") %>% 
+  ggplot(aes(x = gene_name, y = RPKM)) +
+  geom_bar(aes(group = condition, fill = condition), stat = "summary", color = "black", position = position_dodge(), alpha = 0.8) +
+  geom_point(aes(fill = condition, group = condition), shape = 21, position = position_dodge(width = 0.9), size = 2) +
+  facet_grid(.~sys_id_simplified, scales = "free", space = "free_x") +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, face = "bold"), axis.text.y = element_text(face = "bold")) +
+  stat_compare_means(method = "kruskal.test", aes(group = condition), label = "p.signif") +
+  theme(axis.title.x = element_blank(), legend.title = element_blank()) + 
+  theme(strip.text.x = element_text(face = "bold", size = 6.5), strip.text.y = element_text(face = "bold")) +
+  labs(y = "RPKM") + 
+  scale_fill_brewer(type = "qual", palette = 3) +
+  guides(fill = guide_legend(nrow = 1)) +
+  theme(legend.position = "top")
+#~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2024_NMicro/6.expression_level_stat/rpkm_stats/MAPQ1_rRNAdep_stress_RPKM_stats.svg
+
+read_count_nat_micro_tidy %>% filter(!(condition %in% c("Pooled_noTEX", "Pooled_TEX"))) %>% 
+  filter(str_detect(condition, "MM")) %>% 
+  filter(gene_name != "non-defense-gene") %>% 
+  ggplot(aes(x = gene_name, y = RPKM)) +
+  geom_bar(aes(group = condition, fill = condition), stat = "summary", color = "black", position = position_dodge(), alpha = 0.8) +
+  geom_point(aes(fill = condition, group = condition), shape = 21, position = position_dodge(width = 0.9), size = 2) +
+  facet_grid(.~sys_id_simplified, scales = "free", space = "free_x") +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, face = "bold"), axis.text.y = element_text(face = "bold")) +
+  stat_compare_means(method = "kruskal.test", aes(group = condition), label = "p.signif") +
+  theme(axis.title.x = element_blank(), legend.title = element_blank()) + 
+  theme(strip.text.x = element_text(face = "bold", size = 6.5), strip.text.y = element_text(face = "bold")) +
+  labs(y = "RPKM") + 
+  scale_fill_brewer(type = "qual", palette = 3) +
+  guides(fill = guide_legend(nrow = 1)) +
+  theme(legend.position = "top")
+#~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2024_NMicro/6.expression_level_stat/rpkm_stats/MAPQ1_rRNAdep_carbon_RPKM_stats.svg
+
+```
+
+
+
+# Summarize the RNA-seq results from 2022 Cell Host paper of B.uniformis ATCC8492
+## Read the feature count table and calculate RPKM.
+```{r}
+read_count_BU <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-uniformis-ATCC8492_2022_Cell_Host/5.featureCounts/featureCounts_quality1_output.txt", 
+                            sep = "\t", header = T, comment.char = "#")
+read_count_BU_tidy <- read_count_BU %>% gather(key = "sample", value = "read_count", c(7:10))
+sample_read_sum_BU <- read_count_BU_tidy %>% group_by(sample) %>% summarize(sample_read_sum = sum(read_count))
+read_count_BU_tidy <- left_join(read_count_BU_tidy, sample_read_sum_BU, by = "sample")
+read_count_BU_tidy <- read_count_BU_tidy %>% mutate(rpkm = read_count / Length / sample_read_sum * 1e+9)
+colnames(read_count_BU_tidy)[1] <- "ID"
+```
+## Merge the count table with annotation table.
+```{r}
+BU_gff_with_defense <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-uniformis-ATCC8492_2022_Cell_Host/4.genome_annotations/B_uniformis_ATCC-8492_with_defense_info.txt", sep = "\t", header = T)
+
+colnames(read_count_BU_tidy)
+colnames(BU_gff_with_defense)
+read_count_BU_tidy <- left_join(read_count_BU_tidy, BU_gff_with_defense[, -c(4:8)], by = c("ID", "Chr"))
+read_count_BU_tidy$sys_id <- read_count_BU_tidy$sys_id %>% str_remove_all("prodigal_proteins_")
+read_count_BU_tidy <- read_count_BU_tidy %>% mutate(condition = case_when(
+  str_detect(sample, "BMM") ~ "BMM", 
+  str_detect(sample, "Mucin") ~ "Mucin"
+))
+read_count_BU_tidy <- read_count_BU_tidy %>% mutate(gene_name = case_when(
+  str_detect(sys_id, "RM") ~ paste(gene_name, "(", as.character(hit_i_eval), ")", sep = ""),
+  !(str_detect(sys_id, "RM")) ~ gene_name
+))
+
+read_count_BU_tidy %>% filter(gene_name != "non-defense-gene") %>% 
+  ggplot(aes(x = gene_name, y = rpkm)) +
+  geom_bar(stat = "summary", aes(fill = condition, group = condition), color = "black", position = position_dodge(), width = 0.8, alpha = 0.8) + 
+  geom_point(aes(fill = condition), shape = 21, size = 3, position = position_dodge(width = 0.9)) +
+  facet_grid(.~sys_id, scales = "free_x", space = "free_x") + 
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, face = "bold"), axis.text.y = element_text(face = "bold")) +
+  # stat_compare_means(method = "wilcox.test", aes(group = condition), label = "p.signif") +
+  theme(axis.title.x = element_blank(), legend.title = element_blank()) +
+  theme(strip.text.x = element_text(face = "bold", size = 6.5), strip.text.y = element_text(face = "bold")) +
+  labs(y = "RPKM")+
+  guides(fill = guide_legend(position = "top"))
+```
+
+# Summarize the RNA-seq results from 2016 BMC genomics of B.xylan XB1A.
+## Read the featureCount table and calculate RPKM
+```{r}
+read_count_BX <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-xylan-XB1A_2016_BMC_genomics_in_vitro_culture/5.featureCounts/featureCounts_quality1_output.txt", sep = "\t", header = T, comment.char = "#")
+read_count_BX_tidy <- read_count_BX %>% gather(key = "sample", value = "read_count", c(7:30))
+sample_read_sum_BX <- read_count_BX_tidy %>% group_by(sample) %>% summarize(sample_read_sum = sum(read_count))
+read_count_BX_tidy <- left_join(read_count_BX_tidy, sample_read_sum_BX, by = "sample")
+read_count_BX_tidy <- read_count_BX_tidy %>% mutate(rpkm = read_count / Length / sample_read_sum * 1e+9)
+colnames(read_count_BX_tidy)[1] <- "ID"
+```
+## Merge the count table with annotation table.
+```{r}
+BX_gff_with_defense <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-xylan-XB1A_2016_BMC_genomics_in_vitro_culture/4.genome_annotations/B_xylan_XB1A_refseq_with_defense_info.txt", sep = "\t", header = T)
+
+colnames(read_count_BX_tidy)
+colnames(BX_gff_with_defense)
+read_count_BX_tidy <- left_join(read_count_BX_tidy, BX_gff_with_defense[, -c(4:8)], by = c("ID", "Chr"))
+read_count_BX_tidy$sys_id <- read_count_BX_tidy$sys_id %>% str_remove_all("prodigal_proteins_")
+read_count_BX_tidy$condition <- read_count_BX_tidy$sample %>% str_remove_all("_sorted.bam")
+read_count_BX_tidy <- read_count_BX_tidy %>% separate(col = condition, sep = "_", into = c("Growth_stage", "Carbon_source", "Sample_code"))
+read_count_BX_tidy$Growth_Carbon <- paste(read_count_BX_tidy$Growth_stage, read_count_BX_tidy$Carbon_source, sep = "_")
+read_count_BX_tidy <- read_count_BX_tidy %>% mutate(gene_name = case_when(
+  str_detect(sys_id, "RM") ~ paste(gene_name, "(", as.character(hit_i_eval), ")", sep = ""),
+  !(str_detect(sys_id, "RM")) ~ gene_name)
+)
+
+read_count_BX_tidy %>% filter(gene_name != "non-defense-gene") %>% 
+  # filter(Carbon_source %in% c("Citrus.pectin", "Glucose", "Xylan")) %>%
+  ggplot(aes(x = gene_name, y = rpkm)) +
+  geom_bar(stat = "summary", aes(fill = Carbon_source, group = Growth_Carbon), color = "black", position = position_dodge(), width = 0.8, alpha = 0.8) + 
+  geom_point(aes(fill = Carbon_source), shape = 21, size = 3, position = position_dodge(width = 0.8)) +
+  facet_grid(Growth_stage~sys_id, scales = "free_x", space = "free_x") + 
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, face = "bold"), axis.text.y = element_text(face = "bold")) +
+  # stat_compare_means(method = "wilcox.test", aes(group = condition), label = "p.signif") +
+  theme(axis.title.x = element_blank(), legend.title = element_blank()) +
+  theme(strip.text.x = element_text(face = "bold", size = 6.5), strip.text.y = element_text(face = "bold")) +
+  labs(y = "RPKM") +
+  guides(fill = guide_legend(position = "top"))
+```
+
+
+# Expression correlation analysis, with B.theta RNA-seq data (2020 NC; 2023 Science; 2024 Nature Microbiology).
+## Read the featureCount tables and calculate the RPKM
+```{r}
+BT_NC <- read.delim("~/crisprome/artifical_microbiome/intermediates/6.RNA-seq_stats/featureCounts/featureCounts_output.txt", sep = "\t", header = T, comment.char = "#")
+BT_Science <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/5.featureCounts/featureCounts_rRNAignored_quality1_paired_output.txt", sep = "\t", header = T, comment.char = "#")
+BT_NatMicro <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2024_NMicro/5.featureCounts/featureCounts_quality1_output.txt", sep = "\t", header = T, comment.char = "#")
+
+colnames(BT_Science)
+BT_merged_count <- left_join(BT_Science, BT_NatMicro, by = c("Geneid", "Chr", "Start", "End", "Strand", "Length")) %>% left_join(y = BT_NC, by = c("Geneid", "Chr", "Start", "End", "Strand", "Length"))
+BT_merged_count_tidy <- BT_merged_count %>% gather(key = "sample", value = "read_count", c(7:76))
+sample_read_sum <- BT_merged_count_tidy %>% group_by(sample) %>% summarize(sample_read_sum = sum(read_count))
+BT_merged_count_tidy <- left_join(BT_merged_count_tidy, sample_read_sum, by = "sample")
+BT_merged_count_tidy <- BT_merged_count_tidy %>% mutate(rpkm = read_count/ Length / sample_read_sum * 1e+9)
+```
+## Filter the gene-modified samples and genes with too low expression levels
+```{r}
+# some samples are from genetically modified strains or not following conventional RNA-seq, so they are filtered.
+unique(BT_merged_count_tidy$sample)
+good_samples_count_tidy <- BT_merged_count_tidy %>% filter(!(str_detect(sample, "dIDR")) & !(str_detect(sample, "Pooled_TEX")) & 
+                                                          !(str_detect(sample, "BTnc035")) & !(str_detect(sample, "WT_TEX")))
+unique(good_samples_count_tidy$sample)
+
+# some genes with very low expressions should be filtered.
+average_rpkm <- good_samples_count_tidy %>% group_by(Geneid) %>% summarize(average = mean(rpkm), variety = var(rpkm))
+average_rpkm %>% ggplot(aes(x = average, y = sqrt(variety))) + 
+  geom_point() + 
+  scale_x_log10() + 
+  scale_y_log10()
+average_rpkm %>% filter(average >= 1 | variety >= 1) %>% filter(sqrt(variety) <= 1000)
+```
+
+## Merge the RPKM table with annotation table
+```{r}
+BT_gff_with_defense <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/4.genome_annotations/B_theta_ATCC-29148_with_defense_info.txt", sep = "\t", header = T)
+BT_gff_with_defense$Geneid <- BT_gff_with_defense$locus_tag %>% str_remove_all("locus_tag=")
+BT_gff_with_defense <- BT_gff_with_defense %>% mutate(Gene_annotation = case_when(
+  !(is.na(gene_name)) ~ paste(Geneid, ";", gene_name, sep = ""),
+  is.na(gene_name) & !(str_detect(product, "hypothetical")) ~ paste(Geneid, ";", str_remove(product, "product="), 
+                                                                    ";non-defense-gene", sep = ""),
+  is.na(gene_name) & str_detect(product, "hypothetical") ~ paste(Geneid, ";hypothetical;non-defense-gene", sep = "")
+))
+
+good_samples_count_tidy <- left_join(good_samples_count_tidy, 
+                                     BT_gff_with_defense[, c("Geneid", "Gene_annotation", "sys_id")], 
+                                     by = "Geneid")
+# good_samples_count_tidy <- good_samples_count_tidy[, c("sample", "rpkm", "Gene_annotation")] %>% 
+  # spread(key = Gene_annotation, value = rpkm)
+
+# BT_genes_correlation <- cor(BT_merged_count_spread[, -1])
+# BT_genes_correlation$Gene_annotation <- rownames(BT_genes_correlation)
+```
+
+## Calculate the correlation among defense genes and systems.
+```{r}
+defense_gene_count_tidy <- good_samples_count_tidy %>% filter(!(str_detect(Gene_annotation, "non-defense-gene")))
+head(defense_gene_count_tidy$sys_id)
+defense_gene_count_tidy <- defense_gene_count_tidy %>% 
+  mutate(sys_id = str_remove_all(sys_id, "BT_Bacteroides_thetaiotaomicron_ATCC_29148_proteins_"))
+
+defense_gene_count_spread <- defense_gene_count_tidy[, c("sample", "rpkm", "Gene_annotation")] %>% 
+  spread(key = Gene_annotation, value = rpkm)
+defense_gene_correlation <- cor(defense_gene_count_spread[, -1]) %>% 
+  as.data.frame() %>% 
+  tibble::rownames_to_column(var = "gene_1") %>% 
+  gather(key = "gene_2", value = "R-value", -c(gene_1))
+
+defense_gene_correlation <- merge(defense_gene_correlation, BT_gff_with_defense[, c("sys_id", "Gene_annotation")], 
+                                  by.x = "gene_1", by.y = "Gene_annotation", all.x = T)
+colnames(defense_gene_correlation)[4] <- "sys_1"
+defense_gene_correlation <- merge(defense_gene_correlation, BT_gff_with_defense[, c("sys_id", "Gene_annotation")], 
+                                  by.x = "gene_2", by.y = "Gene_annotation", all.x = T)
+colnames(defense_gene_correlation)[5] <- "sys_2"
+defense_gene_correlation$sys_1 <- defense_gene_correlation$sys_1 %>%
+  str_remove_all("BT_Bacteroides_thetaiotaomicron_ATCC_29148_proteins_")
+defense_gene_correlation$sys_2 <- defense_gene_correlation$sys_2 %>%
+  str_remove_all("BT_Bacteroides_thetaiotaomicron_ATCC_29148_proteins_")
+defense_gene_correlation <- defense_gene_correlation %>% mutate(
+  same_gene = case_when(
+    gene_1 == gene_2 ~ "T",
+    gene_1 != gene_2 ~ "F"
+  ),
+  same_sys = case_when(
+    sys_1 == sys_2 ~ "T", 
+    sys_1 != sys_2 ~ "F"
+  )
+)
+
+defense_gene_correlation$gene_1_simplified <- defense_gene_correlation$gene_1 %>% str_split_i(pattern = ";", i =2) %>% 
+  str_split_i(pattern = "__", i = 2)
+defense_gene_correlation$gene_1_simplified <- paste(defense_gene_correlation$sys_1, "__",
+                                                    defense_gene_correlation$gene_1_simplified, sep = "")
+defense_gene_correlation$gene_2_simplified <- defense_gene_correlation$gene_2 %>% str_split_i(pattern = ";", i =2) %>% 
+  str_split_i(pattern = "__", i = 2)
+defense_gene_correlation$gene_2_simplified <- paste(defense_gene_correlation$sys_2, "__",
+                                                    defense_gene_correlation$gene_2_simplified, sep = "")
+```
+### Draw the clustered heatmap.
+```{r}
+defense_gene_correlation_matrix <- defense_gene_correlation[, c("gene_1_simplified", "gene_2_simplified", "R-value")] %>% 
+  spread(key = gene_2_simplified, value = `R-value`) %>% tibble::column_to_rownames(var = "gene_1_simplified")
+defense_gene_sys_annotation <- colnames(defense_gene_correlation_matrix) %>% str_split_i(pattern = "__", i = 1)
+defense_gene_sys_annotation <- data.frame(sys = defense_gene_sys_annotation)
+annotation_color <- defense_gene_sys_annotation %>% group_by(sys) %>% summarize(sys_size = n()) %>% arrange(-sys_size)
+annotation_color$sys_color <- c(RColorBrewer::brewer.pal(n = 5, name = "Set1"), rep("#d9d9d9", times = 5))
+
+defense_gene_correlation_matrix %>% pheatmap(cluster_cols = F, cluster_rows = F,
+                                             annotation_row = data.frame(defense_gene_sys_annotation),
+                                             annotation_col = data.frame(defense_gene_sys_annotation),
+                                             cellwidth = 15, cellheight = 15,
+                                             annotation_colors = list(sys = with(annotation_color, setNames(sys_color, sys))),
+                                             color = c("#31a354", "#ffffbf", "#e9a3c9"))
+#~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2024_NMicro/6.expression_level_stat/expression_correlation/defense_genes_correlation_no-clustering
+
+defense_gene_correlation_matrix %>% as.matrix() %>% 
+  Heatmap(col = c("#31a354", "#ffffbf", "#e9a3c9"), width = unit(10, units = "cm"), height = unit(10, units = "cm"),
+          clustering_distance_rows = "pearson", 
+          clustering_distance_columns = "pearson",
+          show_column_dend = F, column_dend_reorder = T, row_dend_reorder = T) + 
+  rowAnnotation(System = as.array(defense_gene_sys_annotation$sys), 
+                col = list(System = with(annotation_color, setNames(sys_color, sys))))
+#~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2024_NMicro/6.expression_level_stat/expression_correlation/defense_genes_correlation_clustering
+```
+
+
+
+## test code
+```{r}
+data <- data.frame(
+  var1 = c(1, 2, 3, 4, 5),
+  var2 = c(2, 4, 6, 8, 10),
+  var3 = c(3, 6, 9, 12, 15)
+)
+correlation_matrix <- cor(data)
+
+set.seed(123)
+mat <- matrix(rnorm(100), nrow = 10)
+rownames(mat) <- paste0("Row", 1:10)
+colnames(mat) <- paste0("Col", 1:10)
+mat
+
+row_annotation <- data.frame(Group = rep(c("A", "B"), each = 5))
+col_annotation <- data.frame(Group = rep(c("A", "B"), each = 5))
+annotation_colors <- list(Group = c(A = "red", B = "blue", C = "green", D = "yellow"))
+pheatmap(mat, cluster_rows = F, 
+         annotation_row = row_annotation, annotation_col = col_annotation, annotation_colors = annotation_colors) 
+
+
+# 创建示例数据框
+data <- matrix(rnorm(100), nrow = 10)
+rownames(data) <- paste0("Gene", 1:10)
+colnames(data) <- paste0("Sample", 1:10)
+
+# 创建示例注释数据框
+annotation_data <- data.frame(
+  Type = c("A", "B", "A", "B", "A", "B", "A", "B", "A", "B"),
+  Group = c("X", "Y", "X", "Y", "X", "Y", "X", "Y", "X", "Y")
+)
+
+# 绘制热图，并设置每个注释列的颜色
+pheatmap(data,
+         annotation_row = annotation_data,
+         annotation_colors = list(
+           Type = c("A" = "red", "B" = "blue"),
+           Group = c("X" = "green", "Y" = "orange")
+         ))
+c("A" = "red", "B" = "blue")
+with(annotation_color, setNames(sys_color, sys))
+```
+

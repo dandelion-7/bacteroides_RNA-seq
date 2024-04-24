@@ -1,0 +1,332 @@
+---
+title: "expression correlation analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+# Set paths and load libraries
+```{r}
+setwd("~/crisprome/bacteroides_RNA-seq/scripts/")
+
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(stringr)
+library(ComplexHeatmap)
+```
+
+
+
+# Expression correlation analysis, with B.theta RNA-seq data (2020 NC; 2023 Science; 2024 Nature Microbiology).
+## Read the featureCount tables and calculate the RPKM
+```{r}
+BT_NC <- read.delim("~/crisprome/artifical_microbiome/intermediates/6.RNA-seq_stats/featureCounts/featureCounts_output.txt", sep = "\t", header = T, comment.char = "#")
+BT_Science <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/5.featureCounts/featureCounts_rRNAignored_quality1_paired_output.txt", sep = "\t", header = T, comment.char = "#")
+BT_NatMicro <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2024_NMicro/5.featureCounts/featureCounts_quality1_output.txt", sep = "\t", header = T, comment.char = "#")
+
+colnames(BT_Science)
+BT_merged_count <- left_join(BT_Science, BT_NatMicro, by = c("Geneid", "Chr", "Start", "End", "Strand", "Length")) %>% left_join(y = BT_NC, by = c("Geneid", "Chr", "Start", "End", "Strand", "Length"))
+BT_merged_count_tidy <- BT_merged_count %>% gather(key = "sample", value = "read_count", c(7:76))
+sample_read_sum <- BT_merged_count_tidy %>% group_by(sample) %>% summarize(sample_read_sum = sum(read_count))
+BT_merged_count_tidy <- left_join(BT_merged_count_tidy, sample_read_sum, by = "sample")
+BT_merged_count_tidy <- BT_merged_count_tidy %>% mutate(rpkm = read_count/ Length / sample_read_sum * 1e+9)
+```
+## Filter the gene-modified samples and genes with too low expression levels
+```{r}
+# some samples are from genetically modified strains or not following conventional RNA-seq, so they are filtered.
+unique(BT_merged_count_tidy$sample)
+good_samples_count_tidy <- BT_merged_count_tidy %>% filter(!(str_detect(sample, "dIDR")) & !(str_detect(sample, "Pooled_TEX")) & 
+                                                          !(str_detect(sample, "BTnc035")) & !(str_detect(sample, "WT_TEX")))
+unique(good_samples_count_tidy$sample)
+
+# some genes with very low expressions should be filtered.
+average_rpkm <- good_samples_count_tidy %>% group_by(Geneid) %>% summarize(average = mean(rpkm), variety = var(rpkm))
+average_rpkm %>% ggplot(aes(x = average, y = sqrt(variety))) + 
+  geom_point() + 
+  scale_x_log10() + 
+  scale_y_log10()
+average_rpkm %>% filter(average >= 1 | variety >= 1) %>% filter(sqrt(variety) <= 1000)
+```
+## Merge the RPKM table with annotation table
+```{r}
+BT_gff_with_defense <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/4.genome_annotations/B_theta_ATCC-29148_with_defense_info.txt", sep = "\t", header = T)
+BT_gff_with_defense$Geneid <- BT_gff_with_defense$locus_tag %>% str_remove_all("locus_tag=")
+BT_gff_with_defense <- BT_gff_with_defense %>% mutate(Gene_annotation = case_when(
+  !(is.na(gene_name)) ~ paste(Geneid, ";", gene_name, sep = ""),
+  is.na(gene_name) & !(str_detect(product, "hypothetical")) ~ paste(Geneid, ";", str_remove(product, "product="), 
+                                                                    ";non-defense-gene", sep = ""),
+  is.na(gene_name) & str_detect(product, "hypothetical") ~ paste(Geneid, ";hypothetical;non-defense-gene", sep = "")
+))
+
+good_samples_count_tidy <- left_join(good_samples_count_tidy, 
+                                     BT_gff_with_defense[, c("Geneid", "Gene_annotation", "sys_id")], 
+                                     by = "Geneid")
+# good_samples_count_tidy <- good_samples_count_tidy[, c("sample", "rpkm", "Gene_annotation")] %>% 
+  # spread(key = Gene_annotation, value = rpkm)
+
+# BT_genes_correlation <- cor(BT_merged_count_spread[, -1])
+# BT_genes_correlation$Gene_annotation <- rownames(BT_genes_correlation)
+```
+## Calculate the correlation among defense genes and systems.
+```{r}
+defense_gene_count_tidy <- good_samples_count_tidy %>% filter(!(str_detect(Gene_annotation, "non-defense-gene")))
+head(defense_gene_count_tidy$sys_id)
+defense_gene_count_tidy <- defense_gene_count_tidy %>% 
+  mutate(sys_id = str_remove_all(sys_id, "BT_Bacteroides_thetaiotaomicron_ATCC_29148_proteins_"))
+
+defense_gene_count_spread <- defense_gene_count_tidy[, c("sample", "rpkm", "Gene_annotation")] %>% 
+  spread(key = Gene_annotation, value = rpkm)
+defense_gene_correlation <- cor(defense_gene_count_spread[, -1]) %>% 
+  as.data.frame() %>% 
+  tibble::rownames_to_column(var = "gene_1") %>% 
+  gather(key = "gene_2", value = "R-value", -c(gene_1))
+
+defense_gene_correlation <- merge(defense_gene_correlation, BT_gff_with_defense[, c("sys_id", "Gene_annotation")], 
+                                  by.x = "gene_1", by.y = "Gene_annotation", all.x = T)
+colnames(defense_gene_correlation)[4] <- "sys_1"
+defense_gene_correlation <- merge(defense_gene_correlation, BT_gff_with_defense[, c("sys_id", "Gene_annotation")], 
+                                  by.x = "gene_2", by.y = "Gene_annotation", all.x = T)
+colnames(defense_gene_correlation)[5] <- "sys_2"
+defense_gene_correlation$sys_1 <- defense_gene_correlation$sys_1 %>%
+  str_remove_all("BT_Bacteroides_thetaiotaomicron_ATCC_29148_proteins_")
+defense_gene_correlation$sys_2 <- defense_gene_correlation$sys_2 %>%
+  str_remove_all("BT_Bacteroides_thetaiotaomicron_ATCC_29148_proteins_")
+defense_gene_correlation <- defense_gene_correlation %>% mutate(
+  same_gene = case_when(
+    gene_1 == gene_2 ~ "T",
+    gene_1 != gene_2 ~ "F"
+  ),
+  same_sys = case_when(
+    sys_1 == sys_2 ~ "T", 
+    sys_1 != sys_2 ~ "F"
+  )
+)
+
+defense_gene_correlation$gene_1_simplified <- defense_gene_correlation$gene_1 %>% str_split_i(pattern = ";", i =2) %>% 
+  str_split_i(pattern = "__", i = 2)
+defense_gene_correlation$gene_1_simplified <- paste(defense_gene_correlation$sys_1, "__",
+                                                    defense_gene_correlation$gene_1_simplified, sep = "")
+defense_gene_correlation$gene_2_simplified <- defense_gene_correlation$gene_2 %>% str_split_i(pattern = ";", i =2) %>% 
+  str_split_i(pattern = "__", i = 2)
+defense_gene_correlation$gene_2_simplified <- paste(defense_gene_correlation$sys_2, "__",
+                                                    defense_gene_correlation$gene_2_simplified, sep = "")
+```
+### Draw the clustered heatmap.
+```{r}
+defense_gene_correlation_matrix <- defense_gene_correlation[, c("gene_1_simplified", "gene_2_simplified", "R-value")] %>% 
+  spread(key = gene_2_simplified, value = `R-value`) %>% tibble::column_to_rownames(var = "gene_1_simplified")
+defense_gene_sys_annotation <- colnames(defense_gene_correlation_matrix) %>% str_split_i(pattern = "__", i = 1)
+defense_gene_sys_annotation <- data.frame(sys = defense_gene_sys_annotation)
+annotation_color <- defense_gene_sys_annotation %>% group_by(sys) %>% summarize(sys_size = n()) %>% arrange(-sys_size)
+annotation_color$sys_color <- c(RColorBrewer::brewer.pal(n = 5, name = "Set1"), rep("#d9d9d9", times = 5))
+
+defense_gene_correlation_matrix %>% pheatmap(cluster_cols = F, cluster_rows = F,
+                                             annotation_row = data.frame(defense_gene_sys_annotation),
+                                             annotation_col = data.frame(defense_gene_sys_annotation),
+                                             cellwidth = 15, cellheight = 15,
+                                             annotation_colors = list(sys = with(annotation_color, setNames(sys_color, sys))),
+                                             color = c("#31a354", "#ffffbf", "#e9a3c9"))
+#~/crisprome/bacteroides_RNA-seq/intermediates/7.expression_correlation_analysis/BT_defense_genes_correlation_no-clustering
+
+defense_gene_correlation_matrix %>% as.matrix() %>% 
+  Heatmap(col = c("#31a354", "#ffffbf", "#e9a3c9"), width = unit(10, units = "cm"), height = unit(10, units = "cm"),
+          clustering_distance_rows = "pearson", 
+          clustering_distance_columns = "pearson",
+          show_column_dend = F, column_dend_reorder = T, row_dend_reorder = T) + 
+  rowAnnotation(System = as.array(defense_gene_sys_annotation$sys), 
+                col = list(System = with(annotation_color, setNames(sys_color, sys))))
+#~/crisprome/bacteroides_RNA-seq/intermediates/7.expression_correlation_analysis/BT_defense_genes_correlation_clustering
+```
+
+## Calculate the correlation between defense genes and other genes.
+```{r}
+all_gene_count_tidy <- good_samples_count_tidy %>% 
+  mutate(sys_id = str_remove_all(sys_id, "BT_Bacteroides_thetaiotaomicron_ATCC_29148_proteins_"))
+non_defense_gene_count_tidy <- all_gene_count_tidy %>% filter(str_detect(Gene_annotation, "non-defense-gene"))
+defense_gene_count_tidy <- all_gene_count_tidy %>% filter(str_detect(Gene_annotation, "non-defense-gene", negate = T))
+
+non_defense_gene_count_spread <- non_defense_gene_count_tidy[, c("sample", "Gene_annotation", "rpkm")] %>% 
+  spread(key = Gene_annotation, value = rpkm)
+non_defense_genes_list <- colnames(non_defense_gene_count_spread)
+defense_gene_count_spread <- defense_gene_count_tidy[, c("sample", "Gene_annotation", "rpkm")] %>% 
+  spread(key = Gene_annotation, value = rpkm)
+defense_genes_list <- colnames(defense_gene_count_spread)
+cor.test(defense_gene_count_spread[, 2], non_defense_gene_count_spread[, 2], method = "pearson")
+
+correlation_table <- data.frame(defense_gene = character(0), non_defense_gene = character(0), 
+                                pearson_cor = numeric(0), pearson_p = numeric(0), 
+                                spearman_cor = numeric(0), spearman_p = numeric(0))
+for (i in 2:ncol(defense_gene_count_spread)) {
+  defense_gene_name <- defense_genes_list[i]
+  defense_gene_count <- defense_gene_count_spread[, i]
+  for (j in 2:ncol(non_defense_gene_count_spread)) {
+    non_defense_gene_name <- non_defense_genes_list[j]
+    non_defense_gene_count <- non_defense_gene_count_spread[, j]
+    
+    pearson <- cor.test(defense_gene_count, non_defense_gene_count, method = "pearson")
+    spearman <- cor.test(defense_gene_count, non_defense_gene_count, method = "spearman")
+    
+    new_correlation <- data.frame(defense_gene = defense_gene_name, non_defense_gene = non_defense_gene_name,
+                                  pearson_cor = pearson$estimate, pearson_p = pearson$p.value,
+                                  spearman_cor = spearman$estimate, spearman_p = spearman$p.value)
+    correlation_table <- rbind(correlation_table, new_correlation)
+    
+    print(paste("Defense gene:", as.character(i), "; Non-defense gene:", as.character(j), sep = ""))
+  }
+}
+correlation_table %>% write.table("~/crisprome/bacteroides_RNA-seq/intermediates/7.expression_correlation_analysis/defense_vs_all_correlation/correlation_table.txt", sep = "\t", row.names = F, col.names = T, quote = F)
+```
+### Summarize the results of correlation analysis.
+```{r}
+correlation_table <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/7.expression_correlation_analysis/defense_vs_all_correlation/correlation_table.txt", sep = "\t", header = T)
+correlation_table %>% ggplot(aes(x = pearson_cor)) + 
+  geom_histogram(aes(fill = ifelse(pearson_cor < 0.8 & pearson_cor > -0.8, "Non-correlation", "Correlation")), 
+                 breaks = seq(-1, 1, 0.01)) + 
+  scale_x_continuous(limits = c(-1, 1), breaks = seq(-1, 1, 0.1)) + 
+  scale_fill_manual(values = c("#525252", "#d9d9d9")) + 
+  geom_vline(xintercept = -0.8, color = "red") + 
+  geom_vline(xintercept = 0.8, color = "red") + 
+  theme_bw() + 
+  theme(legend.position = "none") + 
+  labs(x = "Pearson's R", y = "Count of gene pair")
+# ~/crisprome/bacteroides_RNA-seq/intermediates/7.expression_correlation_analysis/defense_vs_all_correlation/BT_defense_vs_all_pearson_R_distribution
+
+correlation_table %>% ggplot(aes(x = -log10(pearson_p))) + 
+  geom_histogram(breaks = seq(0, 25, 0.1), aes(fill = ifelse(pearson_p < 0.01, "Significant", "Non-significant"))) + 
+  scale_x_continuous(limits = c(0, 25), breaks = seq(0, 25, 1)) + 
+  scale_fill_manual(values = c("#d9d9d9", "#525252")) + 
+  geom_vline(xintercept = 2, color = "red") + 
+  theme_bw() +
+  theme(legend.position = "none") + 
+  labs(x = "-log10(p-value)", y = "Count of gene pair")
+# ~/crisprome/bacteroides_RNA-seq/intermediates/7.expression_correlation_analysis/defense_vs_all_correlation/BT_defense_vs_all_pearson_p_distribution
+
+positive_correlations <- correlation_table %>% filter(pearson_cor >= 0.8 & pearson_p <= 0.01)
+positive_genes_list <- unique(positive_correlations$non_defense_gene) %>% as.data.frame()
+colnames(positive_genes_list)[1] <- "Gene_annotation"
+positive_genes <- left_join(positive_genes_list, all_gene_count_tidy, by = "Gene_annotation")
+positive_genes_average <- positive_genes %>% group_by(Gene_annotation) %>% summarize(rpkm_mean = mean(rpkm), rpkm_var = var(rpkm))
+positive_genes_average %>% filter(rpkm_mean < 1000) %>% filter(rpkm_mean > 10) %>% 
+  ggplot(aes(x = rpkm_mean, y = sqrt(rpkm_var))) + 
+  geom_point() + 
+  scale_x_continuous(breaks = seq(0, 1000, 100), limits = c(0, 1000)) + 
+  scale_y_continuous(breaks = seq(0, 1000, 100), limits = c(0, 1000)) + 
+  theme_bw() + 
+  labs(x = "RPKM mean", y = "RPKM SD")
+
+negative_correlations <- correlation_table %>% filter(pearson_cor <= -0.8 & pearson_p <= 0.01)
+negative_genes_list <- unique(negative_correlations$non_defense_gene) %>% as.data.frame()
+colnames(negative_genes_list)[1] <- "Gene_annotation"
+negative_genes <- left_join(negative_genes_list, all_gene_count_tidy, by = "Gene_annotation")
+negative_genes_average <- negative_genes %>% group_by(Gene_annotation) %>% summarize(rpkm_mean = mean(rpkm), rpkm_var = var(rpkm))
+negative_genes_average %>% 
+  filter(rpkm_mean < 1000) %>% filter(rpkm_mean > 10) %>%
+  ggplot(aes(x = rpkm_mean, y = sqrt(rpkm_var))) + 
+  geom_point() + 
+  scale_x_continuous(breaks = seq(0, 1000, 100), limits = c(0, 1000)) + 
+  scale_y_continuous(breaks = seq(0, 1000, 100), limits = c(0, 1000)) + 
+  theme_bw() + 
+  labs(x = "RPKM mean", y = "RPKM SD")
+
+positive_genes_average$Correlation <- "Positive"
+negative_genes_average$Correlation <- "Negative"
+correlated_genes_average <- rbind(positive_genes_average, negative_genes_average)
+correlated_genes_average %>% filter(rpkm_mean <= 1000 & rpkm_mean >= 10) %>% 
+  ggplot(aes(x = rpkm_mean, y = sqrt(rpkm_var)), size = 15) + 
+  geom_abline(slope = 1, linetype = "longdash", color = "#bdbdbd") +
+  geom_point(aes(fill = Correlation, shape = Correlation), size = 3, alpha = 0.8) +
+  scale_fill_manual(values = c("#2166ac", "#b2182b")) + 
+  scale_shape_manual(values = c(25, 24)) + 
+  scale_x_continuous(breaks = seq(0, 1000, 100), limits = c(0, 1000)) + 
+  scale_y_continuous(breaks = seq(0, 1000, 100), limits = c(0, 1000)) + 
+  theme_bw() + 
+  labs(x = "RPKM mean", y = "RPKM SD")
+# ~/crisprome/bacteroides_RNA-seq/intermediates/7.expression_correlation_analysis/defense_vs_all_correlation/well_correlated_genes_mean_sd
+
+# Visualize some correlations between a defense gene and a non-defense gene.
+# non_defense_1 <- all_gene_count_tidy %>% filter(str_detect(Gene_annotation, "EAMBDELE_04670"))
+# defense_1 <- all_gene_count_tidy %>% filter(str_detect(Gene_annotation, "EAMBDELE_02566"))
+# test_1 <- as.data.frame(non_defense_1$rpkm)
+# test_1$defense <- defense_1$rpkm
+# colnames(test_1)[1] <- "non_defense"
+# test_1 %>% ggplot(aes(x = defense, y = non_defense)) + 
+  # geom_point()
+```
+
+
+## test code
+```{r}
+data <- data.frame(
+  var1 = c(1, 2, 3, 4, 5),
+  var2 = c(2, 4, 6, 8, 10),
+  var3 = c(3, 6, 9, 12, 15)
+)
+correlation_matrix <- cor(data)
+
+set.seed(123)
+mat <- matrix(rnorm(100), nrow = 10)
+rownames(mat) <- paste0("Row", 1:10)
+colnames(mat) <- paste0("Col", 1:10)
+mat
+
+row_annotation <- data.frame(Group = rep(c("A", "B"), each = 5))
+col_annotation <- data.frame(Group = rep(c("A", "B"), each = 5))
+annotation_colors <- list(Group = c(A = "red", B = "blue", C = "green", D = "yellow"))
+pheatmap(mat, cluster_rows = F, 
+         annotation_row = row_annotation, annotation_col = col_annotation, annotation_colors = annotation_colors) 
+
+
+# 创建示例数据框
+data <- matrix(rnorm(100), nrow = 10)
+rownames(data) <- paste0("Gene", 1:10)
+colnames(data) <- paste0("Sample", 1:10)
+
+# 创建示例注释数据框
+annotation_data <- data.frame(
+  Type = c("A", "B", "A", "B", "A", "B", "A", "B", "A", "B"),
+  Group = c("X", "Y", "X", "Y", "X", "Y", "X", "Y", "X", "Y")
+)
+
+# 绘制热图，并设置每个注释列的颜色
+pheatmap(data,
+         annotation_row = annotation_data,
+         annotation_colors = list(
+           Type = c("A" = "red", "B" = "blue"),
+           Group = c("X" = "green", "Y" = "orange")
+         ))
+c("A" = "red", "B" = "blue")
+with(annotation_color, setNames(sys_color, sys))
+
+data <- data.frame(x = c(1, 2, 3, 4, 5), 
+                   y = c(0.1, 3, 5, 8, 10))
+pearson <- cor.test(data$x, data$y, method = "pearson")
+pearson$p.value
+pearson$estimate
+spearman <- cor.test(data$x, data$y, method = "spearman")
+spearman$p.value
+spearman$estimate
+```
+

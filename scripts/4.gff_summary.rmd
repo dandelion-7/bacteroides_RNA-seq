@@ -1,0 +1,167 @@
+---
+title: "4.gff_summary.rmd"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+# Set path and load libraries.
+```{r}
+setwd("~/crisprome/bacteroides_RNA-seq/scripts/")
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+```
+
+# This script is for summarizing the gff table of genomes with the defense gene prediction results of genomes from DefenseFinder, so as to make following analysis about transcription levels more convinient.
+
+## B.thetaiotaomicron VPI-5482/ATCC 29148.
+### Read the gff table
+```{r}
+gff <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/4.genome_annotations/B_theta_ATCC-29148.gff", 
+                  sep = "\t", header = F)
+colnames(gff) <- c("Chr", "source", "type", "start", "end", "score", "strand", "phase", "attributes")
+attributes <- gff$attributes %>% as.data.frame()
+colnames(attributes) <- "attributes"
+attributes <- separate(data = attributes, col = "attributes", into = c("locus_tag", "codon_start", "product", "transl_table"), sep = ";")
+gff <- cbind(gff, attributes)
+```
+### Read the defense gene prediction table.
+```{r}
+B_theta_defense_genes <- read.delim("~/crisprome/artifical_microbiome/intermediates/2.genome_system_summary/system_summary/2-5.B_theta_genes.txt",
+                                    sep = "\t", header = T)
+B_theta_defense_genes_simplified <- B_theta_defense_genes[, c(6, 7, 8, 9, 17, 20, 27, 29)]
+defense_genes_chr <- separate(B_theta_defense_genes_simplified, col = "hit_id", sep = "_", into = c("id", "number"))[, c(1, 2)]
+B_theta_defense_genes_simplified$Chr <- paste(defense_genes_chr$id, defense_genes_chr$number, sep = "_")
+B_theta_defense_genes_simplified <- B_theta_defense_genes_simplified %>% mutate(start = start - 1)
+B_theta_defense_genes_simplified <- B_theta_defense_genes_simplified %>% mutate(gene_name = case_when(
+  gene_name == "RM__Type_I_S" ~ paste(gene_name, "(", as.character(hit_i_eval), ")", sep = ""),
+  gene_name != "RM__Type_I_S" ~ gene_name
+))
+B_theta_defense_genes_simplified$gene_name_simplified <- as.data.frame(strsplit(B_theta_defense_genes_simplified$gene_name, split = "__"))[2,] %>% t()
+B_theta_defense_genes_simplified <- B_theta_defense_genes_simplified %>% mutate(
+  defense_gene_name = paste("defense_gene_name", gene_name, sep = "="),
+  defense_sys_id=paste("defense_sys_id", sys_id, sep = "="))
+```
+### integrate the defense gene information into the gff table, and write to a new table (not gff)
+```{r}
+gff_with_defense_info <- left_join(gff, B_theta_defense_genes_simplified, by = c("Chr", "start", "end", "strand"))
+gff_with_defense_info$defense_gene_name[is.na(gff_with_defense_info$defense_gene_name)] <- "defense_gene_name=non-defense-gene"
+gff_with_defense_info$defense_sys_id[is.na(gff_with_defense_info$defense_sys_id)] <- "defense_sys_id=non-defense-sys"
+gff_with_defense_info <- gff_with_defense_info %>% mutate(attributes = paste(attributes, defense_gene_name, defense_sys_id, sep = ";"))
+gff_with_defense_info %>% write.table("~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/4.genome_annotations/B_theta_ATCC-29148_with_defense_info.txt", sep = "\t", col.names = T, row.names = F, quote = F)
+```
+
+
+## B.uniformis ATCC 8492
+### Read the gff table
+```{r}
+BU_gff <- read.delim("~/genome/bacteria/B.uniformis/BU_ATCC_8492_GenBank/GCA_000154205.1/genomic.gff", sep = "\t", header = F, comment.char = "#")
+colnames(BU_gff) <- c("Chr", "source", "type", "start", "end", "score", "strand", "phase", "attributes")
+
+# some features are redundantly annotated, like CDS/gene/exon, so the annotations are filtered according to the types.
+table(BU_gff$type)
+BU_gff %>% filter(type == "transcript")
+BU_gff <- BU_gff %>% filter(type %in% c("CDS", "rRNA", "tRNA", "tmRNA", "sequence_feature", "transcript"))
+```
+### Read the defense gene/system prediction table, and merge the gene/system information.
+```{r}
+BU_defense_genes <- read.delim("~/crisprome/artifical_microbiome/intermediates/7.single_genomes_analysis/B.uniformis_ATCC-8492_GenBank/defensefinder/prodigal_proteins_defense_finder_genes.tsv", sep = "\t", header = T)
+BU_defense_systems <- read.delim("~/crisprome/artifical_microbiome/intermediates/7.single_genomes_analysis/B.uniformis_ATCC-8492_GenBank/defensefinder/prodigal_proteins_defense_finder_systems.tsv", sep = "\t", header = T)
+BU_CDS <- read.delim("~/crisprome/artifical_microbiome/intermediates/7.single_genomes_analysis/B.uniformis_ATCC-8492_GenBank/prodigal/prodigal_output.txt", sep = "\t", header = F, comment.char = "#")
+colnames(BU_CDS) <- colnames(BU_gff)
+BU_CDS$hit_id <- BU_CDS$attributes
+BU_CDS <- BU_CDS %>% separate(col = hit_id, sep = ";", into = "hit_id") %>% 
+  separate(col = hit_id, sep = "_", into = c("contig_id", "hit_id")) %>% 
+  subset(select = -contig_id) %>% mutate(hit_id = paste(Chr, hit_id, sep = "_")) # summarize the hit_id to keep identical with the results from Prodigal
+
+BU_defense_genes_systems <- left_join(BU_defense_genes, BU_defense_systems, by = "sys_id")
+BU_defense_merged <- left_join(BU_defense_genes_systems[, c("hit_id", "gene_name", "sys_id", "hit_status", "hit_i_eval")], BU_CDS, by = "hit_id")
+
+BU_gff_with_defense_info <- full_join(BU_gff, BU_defense_merged[, c("Chr", "start", "end", "strand", "hit_id", "gene_name", "sys_id", "hit_status", "hit_i_eval")], 
+                                      by = c("Chr", "start", "end", "strand")) # some CDS are predicted by Prodigal+DefenseFinder, but absent in gff.
+BU_gff_with_defense_info[is.na(BU_gff_with_defense_info$source), "source"] <- "Prodigal_DefenseFinder"
+BU_gff_with_defense_info[is.na(BU_gff_with_defense_info$type), "type"] <- "CDS"
+BU_gff_with_defense_info[is.na(BU_gff_with_defense_info$score), "score"] <- "."
+BU_gff_with_defense_info[is.na(BU_gff_with_defense_info$phase), "phase"] <- "0"
+BU_gff_with_defense_info <- BU_gff_with_defense_info %>% mutate(`attributes` = case_when(
+  is.na(`attributes`) ~ paste("ID=", hit_id, sep = ""),
+  !(is.na(`attributes`)) ~ `attributes`
+))
+BU_gff_with_defense_info[is.na(BU_gff_with_defense_info$gene_name), "gene_name"] <- "non-defense-gene"
+BU_gff_with_defense_info$ID <- BU_gff_with_defense_info$attributes %>% str_split_i(pattern = ";", i = 1) %>% str_remove_all("ID=")
+
+BU_gff_with_defense_info[, 1:9] %>% write.table("~/crisprome/bacteroides_RNA-seq/intermediates/B-uniformis-ATCC8492_2022_Cell_Host/4.genome_annotations/B_uniformis_ATCC-8492_defense_supplemented.gff", col.names = F, row.names = F, sep = "\t", quote = F)
+BU_gff_with_defense_info %>% write.table("~/crisprome/bacteroides_RNA-seq/intermediates/B-uniformis-ATCC8492_2022_Cell_Host/4.genome_annotations/B_uniformis_ATCC-8492_with_defense_info.txt", col.names = T, row.names = F, sep = "\t", quote = F)
+
+# defense_supplemented.gff is for read counting, because some CDS of predicted defense genes are absent in the official gff.
+# with_defense_info.txt table is for summarzing the results of read counts, ID is used as the unique marker of each gene.
+```
+
+## B.xylanisolvens XB1A
+### Read the gff table
+```{r}
+BX_gff <- read.delim("~/genome/bacteria/B.xylanisolvens/BX_XB1A_Refseq/GCF_000210075.1/genomic.gff", sep = "\t", header = F, comment.char = "#")
+colnames(BX_gff) <- c("Chr", "source", "type", "start", "end", "score", "strand", "phase", "attributes")
+
+# some features are redundantly annotated, like CDS/gene/exon, so the annotations are filtered according to the types.
+table(BX_gff$type)
+BX_gff %>% filter(type == "pseudogene")
+BX_gff <- BX_gff %>% filter(type %in% c("CDS", "rRNA", "tRNA", "tmRNA", "riboswitch", "RNase_P_RNA"))
+```
+### Read the defense gene/system prediction table, and merge the gene/system information.
+```{r}
+BX_defense_genes <- read.delim("~/crisprome/artifical_microbiome/intermediates/7.single_genomes_analysis/B.xylanisolvens_XB1A_RefSeq/defensefinder/prodigal_proteins_defense_finder_genes.tsv", sep = "\t", header = T)
+BX_defense_systems <- read.delim("~/crisprome/artifical_microbiome/intermediates/7.single_genomes_analysis/B.xylanisolvens_XB1A_RefSeq/defensefinder/prodigal_proteins_defense_finder_systems.tsv", sep = "\t", header = T)
+BX_CDS <- read.delim("~/crisprome/artifical_microbiome/intermediates/7.single_genomes_analysis/B.xylanisolvens_XB1A_RefSeq/prodigal/prodigal_output.txt", sep = "\t", header = F, comment.char = "#")
+colnames(BX_CDS) <- colnames(BX_gff)
+BX_CDS$hit_id <- BX_CDS$attributes
+BX_CDS <- BX_CDS %>% separate(col = hit_id, sep = ";", into = "hit_id") %>% 
+  separate(col = hit_id, sep = "_", into = c("contig_id", "hit_id")) %>% 
+  subset(select = -contig_id) %>% mutate(hit_id = paste(Chr, hit_id, sep = "_")) # summarize the hit_id to keep identical with the results from Prodigal
+
+BX_defense_genes_systems <- left_join(BX_defense_genes, BX_defense_systems, by = "sys_id")
+BX_defense_merged <- left_join(BX_defense_genes_systems[, c("hit_id", "gene_name", "sys_id", "hit_status", "hit_i_eval")], BX_CDS, by = "hit_id")
+
+BX_gff_with_defense_info <- full_join(BX_gff, BX_defense_merged[, c("Chr", "start", "end", "strand", "hit_id", "gene_name", "sys_id", "hit_status", "hit_i_eval")], 
+                                      by = c("Chr", "start", "end", "strand")) # some CDS are predicted by Prodigal+DefenseFinder, BXt absent in gff.
+BX_gff_with_defense_info[is.na(BX_gff_with_defense_info$source), "source"] <- "Prodigal_DefenseFinder"
+BX_gff_with_defense_info[is.na(BX_gff_with_defense_info$type), "type"] <- "CDS"
+BX_gff_with_defense_info[is.na(BX_gff_with_defense_info$score), "score"] <- "."
+BX_gff_with_defense_info[is.na(BX_gff_with_defense_info$phase), "phase"] <- "0"
+BX_gff_with_defense_info <- BX_gff_with_defense_info %>% mutate(`attributes` = case_when(
+  is.na(`attributes`) ~ paste("ID=", hit_id, sep = ""),
+  !(is.na(`attributes`)) ~ `attributes`
+))
+BX_gff_with_defense_info[is.na(BX_gff_with_defense_info$gene_name), "gene_name"] <- "non-defense-gene"
+BX_gff_with_defense_info$ID <- BX_gff_with_defense_info$attributes %>% str_split_i(pattern = ";", i = 1) %>% str_remove_all("ID=")
+
+BX_gff_with_defense_info[, 1:9] %>% write.table("~/crisprome/bacteroides_RNA-seq/intermediates/B-xylan-XB1A_2016_BMC_genomics_in_vitro_culture/4.genome_annotations/B_xylan_XB1A_refseq_defense_supplemented.gff", col.names = F, row.names = F, sep = "\t", quote = F)
+BX_gff_with_defense_info %>% write.table("~/crisprome/bacteroides_RNA-seq/intermediates/B-xylan-XB1A_2016_BMC_genomics_in_vitro_culture/4.genome_annotations/B_xylan_XB1A_refseq_with_defense_info.txt", col.names = T, row.names = F, sep = "\t", quote = F)
+
+# defense_supplemented.gff is for read counting, because some CDS of predicted defense genes are absent in the official gff.
+# with_defense_info.txt table is for summarzing the results of read counts, ID is used as the unique marker of each gene.
+```
