@@ -209,6 +209,7 @@ read_count_tidy <- read_count_tidy %>% mutate(rpkm = read_count / sample_read_su
 gff_with_defense_info <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/4.genome_annotations/B_theta_ATCC-29148_with_defense_info.txt", sep = "\t", header = T)
 gff_with_defense_info$Geneid <- str_remove_all(gff_with_defense_info$locus_tag, "locus_tag=")
 colnames(gff_with_defense_info)
+colnames(read_count_tidy)
 read_count_tidy <- left_join(read_count_tidy, gff_with_defense_info[, c(1, 3, 9, 12, 15, 16, 19, 22)], by = c("Chr","Geneid"))
 read_count_tidy$gene_name[is.na(read_count_tidy$gene_name)] <- "non-defense-gene"
 read_count_tidy$sys_id_simplified <- read_count_tidy$sys_id %>% str_remove_all("BT_Bacteroides_thetaiotaomicron_ATCC_29148_proteins_")

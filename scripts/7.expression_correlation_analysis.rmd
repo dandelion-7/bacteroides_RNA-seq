@@ -155,7 +155,8 @@ defense_gene_correlation_matrix %>% as.matrix() %>%
   Heatmap(col = c("#31a354", "#ffffbf", "#e9a3c9"), width = unit(10, units = "cm"), height = unit(10, units = "cm"),
           clustering_distance_rows = "pearson", 
           clustering_distance_columns = "pearson",
-          show_column_dend = F, column_dend_reorder = T, row_dend_reorder = T) + 
+          show_column_dend = F, column_dend_reorder = T, row_dend_reorder = T,
+          heatmap_legend_param = list(title = "Pearson's R")) + 
   rowAnnotation(System = as.array(defense_gene_sys_annotation$sys), 
                 col = list(System = with(annotation_color, setNames(sys_color, sys))))
 #~/crisprome/bacteroides_RNA-seq/intermediates/7.expression_correlation_analysis/BT_defense_genes_correlation_clustering

@@ -1,0 +1,153 @@
+---
+title: "8-2.RNA-seq_coverage_plot.rmd"
+output: html_document
+date: "2024-06-16"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+# Always run for this script
+```{r}
+# install.packages("gggenes")
+
+getwd()
+setwd("~/crisprome/bacteroides_RNA-seq/scripts/")
+library(ggplot2)
+library(tidyr)
+library(stringr)
+library(dplyr)
+library(gggenes)
+library(cowplot)
+```
+
+# The following script is for drawing the coverage plots for the 2023 Science paper.
+## PARIS operon of B.theta
+### Read and summarize the coverage table.
+```{r}
+raw_coverage <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/8.coverage_plot/Paris|PARIS_II|2|-2|100|68ba771b28d54293_1:3781227-3784117.txt", sep = "\t", header = T)
+tidy_coverage <- raw_coverage %>% gather(key = "sample", value = "read count", 3:12) %>% 
+  mutate(genotype = case_when(
+    str_detect(sample, "dIDR") ~ "KO",
+    str_detect(sample, "wt") ~ "WT"
+  ))
+average_coverage <- tidy_coverage %>% group_by(contig, position, genotype) %>% summarize(average_read_count = mean(`read count`))
+
+coverage_plot <- average_coverage %>% filter(genotype == "WT") %>% 
+  ggplot(aes(x = position, y = average_read_count)) + 
+  geom_col(fill = "#1a9850", color = "#1a9850") + 
+  scale_y_continuous(breaks = seq(0, 250, 50)) +
+  labs(x = "", y = "Read Count") +
+  theme_bw() + 
+  theme(panel.grid.major.x = element_blank(), panel.grid.minor.x = element_blank()) + 
+  theme(axis.text.x = element_text(face = "bold", size = 10)) + 
+  theme(axis.text.y = element_text(face = "bold", size = 10)) + 
+  theme(axis.title.y = element_text(face = "bold", size = 10))
+coverage_plot
+```
+### Read the gene structure table.
+```{r}
+operon_structures <- read.delim("~/crisprome/artifical_microbiome/intermediates/2.genome_system_summary/system_summary/2-6.B_theta_operon_structures.txt", 
+                               sep = "\t", header = T)
+
+operon_structure <- operon_structures %>% filter(coverage_file_name == "Paris|PARIS_II|2|-2|100|68ba771b28d54293_1:3781227-3784117")
+operon_structure <- operon_structure %>% mutate(strand = case_when(strand == 1 ~ 1, strand == -1 ~ 0))
+left <- as.numeric(unique(operon_structure$coverage_left))
+right <- as.numeric(unique(operon_structure$coverage_right))
+# title <- as.character(unique(operon_structure$coverage_file_name))
+print(title)
+
+operon_structure_plot <- operon_structure %>% ggplot(aes(xmin = start, xmax = end, y = contig, fill = gene_name, label = gene_name, forward = strand)) +
+  geom_gene_arrow(arrow_body_height = grid::unit(5, "mm"), arrowhead_height = grid::unit(8, "mm")) +
+  # facet_wrap(~ contig_id, scales = "free", ncol = 1) +
+  scale_fill_brewer(palette = "Set3") +
+  theme_genes() +
+  geom_gene_label(align = "centre", height = grid::unit(4, "mm")) + 
+  scale_x_continuous(limits = c(left, right)) +
+  theme(axis.text.y = element_blank(), axis.title.y = element_blank()) +
+  theme(axis.text.x = element_text(face = "bold", size = 10)) +
+  theme(axis.title.x = element_text(face = "bold", size = 10)) +
+  theme(legend.position = "None") + 
+  labs(x = "B.thetaiotaomicron VPI-5482, PARIS")
+operon_structure_plot
+```
+#### Plot the merged structure and coverage plot
+```{r}
+plot_grid(coverage_plot, operon_structure_plot, nrow = 2, align = "v", axis = "lr", rel_heights = c(2, 1))
+# ~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/8.coverage_plot/coverage_plot_paris.pdf, w20h6
+```
+
+## PD-λ-5 of B.theta
+```{r}
+raw_coverage <- read.delim("~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/8.coverage_plot/PD-Lambda-5|PD-Lambda-5|2|-2|100|68ba771b28d54293_1:3835876-3839129.txt", sep = "\t", header = T)
+tidy_coverage <- raw_coverage %>% gather(key = "sample", value = "read count", 3:12) %>% 
+  mutate(genotype = case_when(
+    str_detect(sample, "dIDR") ~ "KO",
+    str_detect(sample, "wt") ~ "WT"
+  ))
+average_coverage <- tidy_coverage %>% group_by(contig, position, genotype) %>% summarize(average_read_count = mean(`read count`))
+
+coverage_plot <- average_coverage %>% filter(genotype == "WT") %>% 
+  ggplot(aes(x = position, y = average_read_count)) + 
+  geom_col(fill = "#1a9850", color = "#1a9850") + 
+  scale_y_continuous(breaks = seq(0, 250, 50)) +
+  labs(x = "", y = "Read Count") +
+  theme_bw() + 
+  theme(panel.grid.major.x = element_blank(), panel.grid.minor.x = element_blank()) + 
+  theme(axis.text.x = element_text(face = "bold", size = 10)) + 
+  theme(axis.text.y = element_text(face = "bold", size = 10)) + 
+  theme(axis.title.y = element_text(face = "bold", size = 10))
+coverage_plot
+```
+### Read the gene structure table.
+```{r}
+operon_structures <- read.delim("~/crisprome/artifical_microbiome/intermediates/2.genome_system_summary/system_summary/2-6.B_theta_operon_structures.txt", 
+                               sep = "\t", header = T)
+
+operon_structure <- operon_structures %>% filter(coverage_file_name == "PD-Lambda-5|PD-Lambda-5|2|-2|100|68ba771b28d54293_1:3835876-3839129")
+operon_structure <- operon_structure %>% mutate(strand = case_when(strand == 1 ~ 1, strand == -1 ~ 0))
+left <- as.numeric(unique(operon_structure$coverage_left))
+right <- as.numeric(unique(operon_structure$coverage_right))
+# title <- as.character(unique(operon_structure$coverage_file_name))
+print(title)
+
+operon_structure_plot <- operon_structure %>% ggplot(aes(xmin = start, xmax = end, y = contig, fill = gene_name, label = gene_name, forward = strand)) +
+  geom_gene_arrow(arrow_body_height = grid::unit(5, "mm"), arrowhead_height = grid::unit(8, "mm")) +
+  # facet_wrap(~ contig_id, scales = "free", ncol = 1) +
+  scale_fill_brewer(palette = "Set3") +
+  theme_genes() +
+  geom_gene_label(align = "centre", height = grid::unit(4, "mm")) + 
+  scale_x_continuous(limits = c(left, right)) +
+  theme(axis.text.y = element_blank(), axis.title.y = element_blank()) +
+  theme(axis.text.x = element_text(face = "bold", size = 10)) +
+  theme(axis.title.x = element_text(face = "bold", size = 10)) +
+  theme(legend.position = "None") + 
+  labs(x = "B.thetaiotaomicron VPI-5482, PD-Lambda-5")
+operon_structure_plot
+```
+#### Plot the merged structure and coverage plot
+```{r}
+plot_grid(coverage_plot, operon_structure_plot, nrow = 2, align = "v", axis = "lr", rel_heights = c(2, 1))
+# ~/crisprome/bacteroides_RNA-seq/intermediates/B-theta-VPI5482_2023_science_mouse_colonization/8.coverage_plot/coverage_plot_PDλ5.pdf, w20h6
+```
